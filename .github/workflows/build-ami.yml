@@ -18,7 +18,7 @@ permissions:
 
 env:
   AWS_REGION: us-east-1
-  SUBNET_ID: subnet-078b5efdf09a3f8b7
+  SUBNET_ID: subnet-0b56d1bc2ff32dea5
   PACKER_VERSION: "1.10.0"
 
 jobs:
