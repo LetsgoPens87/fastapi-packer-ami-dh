@@ -58,7 +58,6 @@ jobs:
             -var "aws_region=${{ env.AWS_REGION }}" \
             -var "docker_image=${{ github.event.inputs.docker_image || 'httpd:latest' }}" \
             -var "environment=${{ github.event.inputs.environment || 'dev' }}" \
-            -var "subnet_id=subnet-078b5efdf09a3f8b7" \
             packer.pkr.hcl
       
       - name: Extract AMI ID
