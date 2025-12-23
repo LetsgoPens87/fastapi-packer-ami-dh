@@ -29,6 +29,11 @@ variable "environment" {
   default     = "dev"
 }
 
+variable "subnet_id" {
+  description = "Subnet ID where the EC2 instance will be launched"
+  type        = string
+}
+
 # Data source for latest Amazon Linux 2023 AMI
 data "amazon-ami" "amazon_linux_2023" {
   filters = {
@@ -52,6 +57,7 @@ source "amazon-ebs" "fastapi" {
   source_ami    = data.amazon-ami.amazon_linux_2023.id
   instance_type = "t2.micro"
   ssh_username  = "ec2-user"
+  subnet_id     = var.subnet_id
   
   # AMI configuration
   ami_name        = local.ami_name
