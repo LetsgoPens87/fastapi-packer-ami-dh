@@ -11,6 +11,10 @@ on:
         description: 'Environment (dev, staging, prod)'
         required: false
         default: 'dev'
+      ami_name_prefix:
+        description: 'Prefix for AMI name'
+        required: false
+        default: 'myapp'
 
 permissions:
   id-token: write
@@ -23,46 +27,56 @@ env:
 
 jobs:
   build-ami:
-    name: Build Golden AMI
+    name: Build Golden AMI for ${{ matrix.environment }}
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        environment: [dev, qa, prod]
     outputs:
       ami_id: ${{ steps.ami.outputs.ami_id }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           role-session-name: GitHubActions-Packer
           aws-region: ${{ env.AWS_REGION }}
-      
+
       - name: Verify AWS credentials
         run: |
           aws sts get-caller-identity
           echo "✅ AWS credentials configured successfully"
-      
+
       - name: Setup Packer
         uses: hashicorp/setup-packer@main
         with:
           version: ${{ env.PACKER_VERSION }}
-      
+
+      - name: Setup environment for Packer
+        env:
+          PACKER_GITHUB_API_TOKEN: ${{ secrets.PACKER_GITHUB_API_TOKEN }}
+        run: |
+          packer init packer.pkr.hcl
+
       - name: Initialize Packer
         run: packer init packer.pkr.hcl
-      
+
       - name: Validate Packer template
         run: packer validate packer.pkr.hcl
-      
-      - name: Build AMI
+
+      - name: Build AMI for ${{ matrix.environment }}
         run: |
           packer build \
             -var "aws_region=${{ env.AWS_REGION }}" \
             -var "subnet_id=${{ env.SUBNET_ID }}" \
-            -var "docker_image=${{ github.event.inputs.docker_image || 'httpd:latest' }}" \
-            -var "environment=${{ github.event.inputs.environment || 'dev' }}" \
+            -var "docker_image=${{ github.event.inputs.docker_image }}" \
+            -var "environment=${{ matrix.environment }}" \
+            -var "ami_name_prefix=${{ github.event.inputs.ami_name_prefix }}" \
             packer.pkr.hcl
-      
+
       - name: Extract AMI ID
         id: ami
         run: |
@@ -72,14 +86,15 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**AMI ID:** \`$AMI_ID\`" >> $GITHUB_STEP_SUMMARY
           echo "**Region:** ${{ env.AWS_REGION }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Docker Image:** ${{ github.event.inputs.docker_image || 'httpd:latest' }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ matrix.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Docker Image:** ${{ github.event.inputs.docker_image }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Use this AMI ID in your Terraform configuration!" >> $GITHUB_STEP_SUMMARY
-      
+
       - name: Upload manifest
         uses: actions/upload-artifact@v4
         with:
-          name: packer-manifest
+          name: packer-manifest-${{ matrix.environment }}
           path: manifest.json
           retention-days: 30
 
@@ -95,37 +110,30 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Download AMI ID from previous job
-        run: echo "AMI_ID=${{ needs.build-ami.outputs.ami_id }}" >> $GITHUB_ENV
+        run: |
+          echo "AMI_ID=${{ needs.build-ami.outputs.ami_id }}" >> $GITHUB_ENV
 
       - name: Run AMI Test
         env:
           AMI_ID: ${{ env.AMI_ID }}
         run: |
-          # Paste your test script here, replacing $AMI_ID with the env variable
-          # Example: run your test script you shared earlier
-          # For simplicity, here's a placeholder:
-          
-          # Get default VPC
+          # Your testing script here
           VPC_ID=$(aws ec2 describe-vpcs --filters "Name=is-default,Values=true" --query 'Vpcs[0].VpcId' --output text)
 
-          # Get a subnet
           SUBNET_ID=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query 'Subnets[0].SubnetId' --output text)
 
-          # Create security group
           SG_ID=$(aws ec2 create-security-group \
             --group-name test-ami-sg \
             --description "Test AMI security group" \
             --vpc-id $VPC_ID \
             --query 'GroupId' --output text)
 
-          # Allow HTTP
           aws ec2 authorize-security-group-ingress \
             --group-id $SG_ID \
             --protocol tcp \
             --port 80 \
             --cidr 0.0.0.0/0
 
-          # Launch instance with your AMI
           INSTANCE_ID=$(aws ec2 run-instances \
             --image-id $AMI_ID \
             --instance-type t2.micro \
@@ -136,10 +144,8 @@ jobs:
 
           echo "Instance launched: $INSTANCE_ID"
 
-          # Wait for instance to be running
           aws ec2 wait instance-running --instance-ids $INSTANCE_ID
 
-          # Get public IP
           PUBLIC_IP=$(aws ec2 describe-instances \
             --instance-ids $INSTANCE_ID \
             --query 'Reservations[0].Instances[0].PublicIpAddress' \
@@ -147,6 +153,4 @@ jobs:
 
           echo "Access your app at: http://$PUBLIC_IP"
 
-          # Wait a minute for the service to start, then test
           sleep 60
-          curl http://$PUBLIC_IP
