@@ -6,7 +6,7 @@ on:
       docker_image:
         description: 'Docker image to bake into AMI'
         required: true
-        default: 'dhricko9/fastapi-simple:v2.0'
+        default: 'dhricko9/fastapi-simple:v3.0'
       environment:
         description: 'Environment (dev, staging, prod)'
         required: false
