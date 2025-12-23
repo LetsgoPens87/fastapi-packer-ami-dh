@@ -13,7 +13,7 @@ on:
         default: 'dev'
 
 permissions:
-  id-token: write  # Required for OIDC
+  id-token: write
   contents: read
 
 env:
@@ -25,7 +25,8 @@ jobs:
   build-ami:
     name: Build Golden AMI
     runs-on: ubuntu-latest
-    
+    outputs:
+      ami_id: ${{ steps.ami.outputs.ami_id }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -81,6 +82,71 @@ jobs:
           name: packer-manifest
           path: manifest.json
           retention-days: 30
-    
-    outputs:
-      ami_id: ${{ steps.ami.outputs.ami_id }}
+
+  test-ami:
+    needs: build-ami
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: TestAMI
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Download AMI ID from previous job
+        run: echo "AMI_ID=${{ needs.build-ami.outputs.ami_id }}" >> $GITHUB_ENV
+
+      - name: Run AMI Test
+        env:
+          AMI_ID: ${{ env.AMI_ID }}
+        run: |
+          # Paste your test script here, replacing $AMI_ID with the env variable
+          # Example: run your test script you shared earlier
+          # For simplicity, here's a placeholder:
+          
+          # Get default VPC
+          VPC_ID=$(aws ec2 describe-vpcs --filters "Name=is-default,Values=true" --query 'Vpcs[0].VpcId' --output text)
+
+          # Get a subnet
+          SUBNET_ID=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query 'Subnets[0].SubnetId' --output text)
+
+          # Create security group
+          SG_ID=$(aws ec2 create-security-group \
+            --group-name test-ami-sg \
+            --description "Test AMI security group" \
+            --vpc-id $VPC_ID \
+            --query 'GroupId' --output text)
+
+          # Allow HTTP
+          aws ec2 authorize-security-group-ingress \
+            --group-id $SG_ID \
+            --protocol tcp \
+            --port 80 \
+            --cidr 0.0.0.0/0
+
+          # Launch instance with your AMI
+          INSTANCE_ID=$(aws ec2 run-instances \
+            --image-id $AMI_ID \
+            --instance-type t2.micro \
+            --security-group-ids $SG_ID \
+            --subnet-id $SUBNET_ID \
+            --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=ami-test}]' \
+            --query 'Instances[0].InstanceId' --output text)
+
+          echo "Instance launched: $INSTANCE_ID"
+
+          # Wait for instance to be running
+          aws ec2 wait instance-running --instance-ids $INSTANCE_ID
+
+          # Get public IP
+          PUBLIC_IP=$(aws ec2 describe-instances \
+            --instance-ids $INSTANCE_ID \
+            --query 'Reservations[0].Instances[0].PublicIpAddress' \
+            --output text)
+
+          echo "Access your app at: http://$PUBLIC_IP"
+
+          # Wait a minute for the service to start, then test
+          sleep 60
+          curl http://$PUBLIC_IP
