@@ -18,6 +18,7 @@ permissions:
 
 env:
   AWS_REGION: us-east-1
+  SUBNET_ID: subnet-078b5efdf09a3f8b7
   PACKER_VERSION: "1.10.0"
 
 jobs:
@@ -56,6 +57,7 @@ jobs:
         run: |
           packer build \
             -var "aws_region=${{ env.AWS_REGION }}" \
+            -var "subnet_id=${{ env.SUBNET_ID }}" \
             -var "docker_image=${{ github.event.inputs.docker_image || 'httpd:latest' }}" \
             -var "environment=${{ github.event.inputs.environment || 'dev' }}" \
             packer.pkr.hcl
