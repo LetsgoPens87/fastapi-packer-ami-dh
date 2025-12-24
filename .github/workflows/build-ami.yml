@@ -10,7 +10,7 @@ on:
       environment:
         description: 'Environment (dev, staging, qa, prod)'
         required: false
-        default: 'dev'
+        default: 'qa'
 
 permissions:
   id-token: write
@@ -18,7 +18,7 @@ permissions:
 
 env:
   AWS_REGION: us-east-1
-  SUBNET_ID: subnet-0b56d1bc2ff32dea5
+  SUBNET_ID: subnet-0aad96ba58b95b06c
   PACKER_VERSION: "1.10.0"
 
 jobs:
@@ -65,8 +65,8 @@ jobs:
           packer build \
             -var "aws_region=${{ env.AWS_REGION }}" \
             -var "subnet_id=${{ env.SUBNET_ID }}" \
-            -var "docker_image=${{ github.event.inputs.docker_image || 'httpd:latest' }}" \
-            -var "environment=${{ github.event.inputs.environment || 'dev' }}" \
+            -var "docker_image=${{ github.event.inputs.docker_image }}" \
+            -var "environment=${{ github.event.inputs.environment }}" \
             packer.pkr.hcl
 
       - name: Extract AMI ID
@@ -78,7 +78,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**AMI ID:** \`$AMI_ID\`" >> $GITHUB_STEP_SUMMARY
           echo "**Region:** ${{ env.AWS_REGION }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Docker Image:** ${{ github.event.inputs.docker_image || 'httpd:latest' }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Docker Image:** ${{ github.event.inputs.docker_image }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Use this AMI ID in your Terraform configuration!" >> $GITHUB_STEP_SUMMARY
 
@@ -109,6 +109,7 @@ jobs:
         env:
           AMI_ID: ${{ env.AMI_ID }}
         run: |
+          # Similar validation logic as before...
           VPC_ID=$(aws ec2 describe-subnets --subnet-ids "$SUBNET_ID" --query 'Subnets[0].VpcId' --output text)
           if [ -z "$VPC_ID" ] || [ "$VPC_ID" == "None" ]; then
             echo "Could not retrieve VPC ID for subnet: $SUBNET_ID"
@@ -164,124 +165,140 @@ jobs:
         if: ${{ github.event.inputs.environment == 'qa' }}
         env:
           AMI_ID: ${{ env.AMI_ID }}
+          SUBNET_ID: ${{ env.SUBNET_ID }}
         run: |
-          echo "Starting zero-downtime deployment verification for QA..."
-          VPC_ID=$(aws ec2 describe-vpcs --filters "Name=isDefault,Values=true" --query 'Vpcs[0].VpcId' --output text)
+          # Environment-agnostic QA test script
+          VPC_ID=$(aws ec2 describe-subnets --subnet-ids "$SUBNET_ID" --query 'Subnets[0].VpcId' --output text)
           if [ -z "$VPC_ID" ] || [ "$VPC_ID" == "None" ]; then
-            echo "No default VPC found."
-            exit 1
-          fi
-          echo "Using VPC: $VPC_ID"
-          
-          SUBNET_ID=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query 'Subnets[0].SubnetId' --output text)
-          if [ -z "$SUBNET_ID" ] || [ "$SUBNET_ID" == "None" ]; then
-            echo "No subnet found in VPC: $VPC_ID"
-            exit 1
-          fi
-          echo "Using Subnet: $SUBNET_ID"
-
-          SG_ID=$(aws ec2 create-security-group \
-            --group-name qa-zero-downtime-sg-$(date +%s) \
-            --description "QA Zero-Downtime SG" \
-            --vpc-id "$VPC_ID" \
-            --query 'GroupId' --output text)
-          echo "Created security group: $SG_ID"
-
-          aws ec2 authorize-security-group-ingress \
-            --group-id "$SG_ID" \
-            --protocol tcp \
-            --port 80 \
-            --cidr 0.0.0.0/0
-
-          NEW_INSTANCE_ID=$(aws ec2 run-instances \
-            --image-id "$AMI_ID" \
-            --instance-type t2.micro \
-            --security-group-ids "$SG_ID" \
-            --subnet-id "$SUBNET_ID" \
-            --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=qa-zero-downtime-new}]' \
-            --query 'Instances[0].InstanceId' --output text)
-
-          echo "Launched new instance: $NEW_INSTANCE_ID"
-
-          aws ec2 wait instance-running --instance-ids "$NEW_INSTANCE_ID"
-
-          NEW_PUBLIC_IP=$(aws ec2 describe-instances \
-            --instance-ids "$NEW_INSTANCE_ID" \
-            --query 'Reservations[0].Instances[0].PublicIpAddress' \
-            --output text)
-
-          echo "New deployment accessible at: http://$NEW_PUBLIC_IP"
-
-          sleep 60
-
-          curl --fail --show-error --silent --max-time 10 http://$NEW_PUBLIC_IP || {
-            echo "Failed to reach the new deployment!"
-            aws ec2 terminate-instances --instance-ids "$NEW_INSTANCE_ID"
-            exit 1
-          }
-          # Optional cleanup
-          # aws ec2 terminate-instances --instance-ids "$NEW_INSTANCE_ID"
-          # aws ec2 delete-security-group --group-id "$SG_ID"
-
-          echo "Zero-downtime deployment verification completed."
-
-      # Run production rollout monitoring
-      - name: Monitor Production Rollout
-        if: ${{ github.event.inputs.environment == 'prod' }}
-        env:
-          AMI_ID: ${{ env.AMI_ID }}
-        run: |
-          echo "Starting production rollout monitoring..."
-          VPC_ID=$(aws ec2 describe-vpcs --filters "Name=isDefault,Values=true" --query 'Vpcs[0].VpcId' --output text)
-          if [ -z "$VPC_ID" ] || [ "$VPC_ID" == "None" ]; then
-            echo "No default VPC found."
+            echo "Could not retrieve VPC ID for subnet: $SUBNET_ID"
             exit 1
           fi
           echo "Using VPC: $VPC_ID"
 
-          SUBNET_ID=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query 'Subnets[0].SubnetId' --output text)
-          if [ -z "$SUBNET_ID" ] || [ "$SUBNET_ID" == "None" ]; then
-            echo "No subnet found in VPC: $VPC_ID"
-            exit 1
-          fi
-          echo "Using Subnet: $SUBNET_ID"
-
-          SG_ID=$(aws ec2 create-security-group \
-            --group-name prod-monitor-sg-$(date +%s) \
-            --description "Prod rollout monitor SG" \
-            --vpc-id "$VPC_ID" \
-            --query 'GroupId' --output text)
+          SG_NAME="qa-zero-downtime-sg-$(date +%s)"
+          SG_ID=$(aws ec2 create-security-group --group-name "$SG_NAME" --description "QA Zero-Downtime SG" --vpc-id "$VPC_ID" --query 'GroupId' --output text)
           echo "Created security group: $SG_ID"
 
-          aws ec2 authorize-security-group-ingress \
-            --group-id "$SG_ID" \
-            --protocol tcp \
-            --port 80 \
-            --cidr 0.0.0.0/0
+          aws ec2 authorize-security-group-ingress --group-id "$SG_ID" --protocol tcp --port 80 --cidr 0.0.0.0/0
 
           INSTANCE_ID=$(aws ec2 run-instances \
             --image-id "$AMI_ID" \
             --instance-type t2.micro \
             --security-group-ids "$SG_ID" \
             --subnet-id "$SUBNET_ID" \
-            --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=prod-rollout-monitor}]' \
+            --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=qa-zero-downtime}]" \
             --query 'Instances[0].InstanceId' --output text)
+          echo "Launched instance: $INSTANCE_ID"
 
+          aws ec2 wait instance-running --instance-ids "$INSTANCE_ID"
+
+          PUBLIC_IP=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)
+          echo "Instance IP: $PUBLIC_IP"
+
+          # Wait for app to respond with 200 OK with retries
+          retries=10
+          success=false
+          for i in $(seq 1 $retries); do
+            STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 http://$PUBLIC_IP)
+            if [ "$STATUS_CODE" == "200" ]; then
+              echo "Application responded with 200 OK."
+              success=true
+              break
+            else
+              echo "Attempt $i: no 200 response yet (status: $STATUS_CODE). Retrying in 10s..."
+              sleep 10
+            fi
+          done
+
+          if [ "$success" != "true" ]; then
+            echo "App not responding with 200 OK after retries."
+            aws ec2 terminate-instances --instance-ids "$INSTANCE_ID"
+            exit 1
+          fi
+
+          # Check for specific content (adjust as needed)
+          RESPONSE=$(curl --silent --max-time 5 http://$PUBLIC_IP)
+          if echo "$RESPONSE" | grep -q "Welcome to QA"; then
+            echo "Page content verified."
+          else
+            echo "Expected content not found."
+            aws ec2 terminate-instances --instance-ids "$INSTANCE_ID"
+            exit 1
+          fi
+
+          # Cleanup
+          aws ec2 terminate-instances --instance-ids "$INSTANCE_ID"
+          echo "QA verification completed successfully."
+
+      # Run Production rollout monitoring
+      - name: Monitor Production Rollout
+        if: ${{ github.event.inputs.environment == 'prod' }}
+        env:
+          AMI_ID: ${{ env.AMI_ID }}
+          SUBNET_ID: ${{ env.SUBNET_ID }}
+        run: |
+          # Environment-agnostic production monitor
+          VPC_ID=$(aws ec2 describe-subnets --subnet-ids "$SUBNET_ID" --query 'Subnets[0].VpcId' --output text)
+          if [ -z "$VPC_ID" ] || [ "$VPC_ID" == "None" ]; then
+            echo "Could not retrieve VPC ID for subnet: $SUBNET_ID"
+            exit 1
+          fi
+          echo "Using VPC: $VPC_ID"
+
+          SG_NAME="prod-monitor-sg-$(date +%s)"
+          SG_ID=$(aws ec2 create-security-group --group-name "$SG_NAME" --description "Prod rollout monitor SG" --vpc-id "$VPC_ID" --query 'GroupId' --output text)
+          echo "Created security group: $SG_ID"
+
+          aws ec2 authorize-security-group-ingress --group-id "$SG_ID" --protocol tcp --port 80 --cidr 0.0.0.0/0
+
+          INSTANCE_ID=$(aws ec2 run-instances \
+            --image-id "$AMI_ID" \
+            --instance-type t2.micro \
+            --security-group-ids "$SG_ID" \
+            --subnet-id "$SUBNET_ID" \
+            --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=prod-rollout-monitor}]" \
+            --query 'Instances[0].InstanceId' --output text)
           echo "Launched monitoring instance: $INSTANCE_ID"
 
           aws ec2 wait instance-running --instance-ids "$INSTANCE_ID"
 
-          PUBLIC_IP=$(aws ec2 describe-instances \
-            --instance-ids "$INSTANCE_ID" \
-            --query 'Reservations[0].Instances[0].PublicIpAddress' \
-            --output text)
+          PUBLIC_IP=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)
+          echo "Monitoring instance at: http://$PUBLIC_IP"
 
-          echo "Monitoring instance accessible at: http://$PUBLIC_IP"
+          retries=10
+          success=false
+          for i in $(seq 1 $retries); do
+            STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 http://$PUBLIC_IP)
+            if [ "$STATUS_CODE" == "200" ]; then
+              echo "Instance responded with 200 OK."
+              success=true
+              break
+            else
+              echo "Attempt $i: no 200 response yet (status: $STATUS_CODE). Retrying in 15s..."
+              sleep 15
+            fi
+          done
 
-          sleep 60
-
-          curl --fail --show-error --silent --max-time 10 http://$PUBLIC_IP || {
-            echo "Failed to reach the monitoring instance."
+          if [ "$success" != "true" ]; then
+            echo "Failed to get 200 OK after $retries attempts."
             aws ec2 terminate-instances --instance-ids "$INSTANCE_ID"
             exit 1
-          }
+          fi
+
+          # Check for specific content (adjust as needed)
+          RESPONSE=$(curl --silent --max-time 5 http://$PUBLIC_IP)
+          if echo "$RESPONSE" | grep -q "Expected Content or Health Indicator"; then
+            echo "Application content verified."
+          else
+            echo "Expected content not found or health check failed."
+            aws ec2 terminate-instances --instance-ids "$INSTANCE_ID"
+            exit 1
+          fi
+
+          # Optional: monitor response time
+          RESPONSE_TIME=$(curl -s -w "%{time_total}" -o /dev/null --max-time 5 http://$PUBLIC_IP)
+          echo "Response time: $RESPONSE_TIME seconds"
+
+          # Final cleanup
+          aws ec2 terminate-instances --instance-ids "$INSTANCE_ID"
+          echo "Production rollout verification completed successfully."
