@@ -201,7 +201,7 @@ jobs:
           for i in $(seq 1 $retries); do
             echo "Attempt $i: Checking if web server is responsive..."
             curl -s --max-time 10 http://$INSTANCE_IP && SUCCESS=true && break
-            sleep 30
+            sleep 120
           done
 
           if [ "$success" != "true" ]; then
