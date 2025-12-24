@@ -10,7 +10,7 @@ on:
       environment:
         description: 'Environment (dev, staging, qa, prod)'
         required: false
-        default: 'qa'
+        default: 'prod'
 
 permissions:
   id-token: write
@@ -18,7 +18,7 @@ permissions:
 
 env:
   AWS_REGION: us-east-1
-  SUBNET_ID: subnet-0aad96ba58b95b06c
+  SUBNET_ID: subnet-029d73d629d42a5ff
   PACKER_VERSION: "1.10.0"
 
 jobs:
