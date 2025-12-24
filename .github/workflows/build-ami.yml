@@ -109,19 +109,12 @@ jobs:
         env:
           AMI_ID: ${{ env.AMI_ID }}
         run: |
-          VPC_ID=$(aws ec2 describe-vpcs --filters "Name=isDefault,Values=true" --query 'Vpcs[0].VpcId' --output text)
+          VPC_ID=$(aws ec2 describe-subnets --subnet-ids "$SUBNET_ID" --query 'Subnets[0].VpcId' --output text)
           if [ -z "$VPC_ID" ] || [ "$VPC_ID" == "None" ]; then
-            echo "No default VPC found."
+            echo "Could not retrieve VPC ID for subnet: $SUBNET_ID"
             exit 1
           fi
           echo "Using VPC: $VPC_ID"
-
-          SUBNET_ID=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --query 'Subnets[0].SubnetId' --output text)
-          if [ -z "$SUBNET_ID" ] || [ "$SUBNET_ID" == "None" ]; then
-            echo "No subnet found in VPC: $VPC_ID"
-            exit 1
-          fi
-          echo "Using Subnet: $SUBNET_ID"
 
           SG_ID=$(aws ec2 create-security-group \
             --group-name test-ami-sg-$(date +%s) \
