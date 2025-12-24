@@ -10,7 +10,7 @@ on:
       environment:
         description: 'Environment (dev, staging, qa, prod)'
         required: false
-        default: 'dev'
+        default: 'qa'
 
 permissions:
   id-token: write
@@ -18,7 +18,7 @@ permissions:
 
 env:
   AWS_REGION: us-east-1
-  SUBNET_ID: subnet-0b56d1bc2ff32dea5
+  SUBNET_ID: subnet-0aad96ba58b95b06c
   PACKER_VERSION: "1.10.0"
 
 jobs:
@@ -103,14 +103,13 @@ jobs:
       - name: Download AMI ID from previous job
         run: echo "AMI_ID=${{ needs.build-ami.outputs.ami_id }}" >> $GITHUB_ENV
 
-      # Run Dev environment test
-      - name: Run EC2 Test (Dev only)
+      # Run Dev environment test (optional placeholder, customize as needed)
+      - name: Run EC2 Test (dev only)
         if: ${{ github.event.inputs.environment == 'dev' }}
         env:
           AMI_ID: ${{ env.AMI_ID }}
         run: |
-          # (Similar validation logic as your previous script)
-          # [Omitted for brevity, use your existing dev test script]
+          # Your dev test logic here...
 
       # Run QA zero-downtime verification
       - name: Verify Zero-Downtime Deployment (QA only)
@@ -173,7 +172,7 @@ jobs:
             exit 1
           fi
 
-          # Check for specific page content
+          # Check for expected page content
           RESPONSE=$(curl --silent --max-time 5 http://$PUBLIC_IP)
           if echo "$RESPONSE" | grep -q "Welcome to QA"; then
             echo "Page content verified."
@@ -185,7 +184,7 @@ jobs:
 
           # Cleanup
           aws ec2 terminate-instances --instance-ids "$INSTANCE_ID"
-          echo "QA verification completed successfully."          
+          echo "QA verification completed successfully."
 
       # Run Production rollout monitoring
       - name: Monitor Production Rollout
